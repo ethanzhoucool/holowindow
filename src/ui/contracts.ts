@@ -5,6 +5,8 @@ export interface HudCallbacks {
   onSettingsChange(settings: Settings): void;
   /** User picked / dropped an image for photo mode. */
   onImage(file: File): void;
+  /** User picked / dropped a 3D model (.glb / .gltf) for model mode. */
+  onModel(file: File): void;
   /** User clicked "recenter" — treat the current head position as straight-on. */
   onRecenter(): void;
   onToggleFullscreen(): void;

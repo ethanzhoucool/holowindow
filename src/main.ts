@@ -3,13 +3,15 @@ import './style.css';
 import { OffAxisCamera } from './render/offAxisCamera';
 import { FaceTracker } from './tracking/faceTracker';
 import { MouseSource } from './tracking/mouseSource';
-import { createRoomScene } from './scenes/roomScene';
-import { createPhotoScene, type PhotoScene } from './scenes/photoScene';
+import type { PhotoScene } from './scenes/photoScene';
+import type { ModelScene } from './scenes/modelScene';
 import { createHud, hasSeenIntro } from './ui/hud';
 import {
   DEFAULT_POSE,
   DEFAULT_SETTINGS,
+  MODES,
   type HeadPose,
+  type Mode,
   type HeadSource,
   type HoloScene,
   type SceneContext,
@@ -22,7 +24,11 @@ const STORAGE_KEY = 'holowindow:settings:v1';
 function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    if (raw) {
+      const s: Settings = { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+      if (!MODES.includes(s.mode)) s.mode = DEFAULT_SETTINGS.mode;
+      return s;
+    }
   } catch {
     /* storage unavailable */
   }
@@ -90,22 +96,51 @@ function onResize(): void {
 window.addEventListener('resize', onResize);
 
 // ---------- scenes ----------
-const room = createRoomScene();
-const photo: PhotoScene = createPhotoScene();
+// Each scene is its own chunk, loaded the first time its mode is picked.
+const sceneFactories: Record<Mode, () => Promise<HoloScene>> = {
+  room: () => import('./scenes/roomScene').then((m) => m.createRoomScene()),
+  space: () => import('./scenes/spaceScene').then((m) => m.createSpaceScene()),
+  aquarium: () => import('./scenes/aquariumScene').then((m) => m.createAquariumScene()),
+  photo: () => import('./scenes/photoScene').then((m) => m.createPhotoScene()),
+  model: () => import('./scenes/modelScene').then((m) => m.createModelScene()),
+};
+const scenes = new Map<Mode, Promise<HoloScene>>();
 let active: HoloScene | null = null;
-const initialised = new Set<HoloScene>();
+let modeRequest = 0;
 
-async function setMode(mode: Settings['mode']): Promise<void> {
-  const next = mode === 'photo' ? photo : room;
-  if (next === active) return;
-  if (active) scene.remove(active.root);
-  if (!initialised.has(next)) {
-    await next.init(ctx);
-    initialised.add(next);
+function getScene(mode: Mode): Promise<HoloScene> {
+  let p = scenes.get(mode);
+  if (!p) {
+    p = sceneFactories[mode]().then(async (sc) => {
+      await sc.init(ctx);
+      return sc;
+    });
+    p.catch(() => scenes.delete(mode));
+    scenes.set(mode, p);
   }
-  active = next;
-  scene.add(next.root);
+  return p;
+}
+
+async function setMode(mode: Mode): Promise<HoloScene> {
+  const req = ++modeRequest;
+  const next = await getScene(mode);
+  if (req !== modeRequest) return next; // a newer mode switch won
+  if (next !== active) {
+    if (active) scene.remove(active.root);
+    active = next;
+    scene.add(next.root);
+  }
   next.resize(ctx);
+  return next;
+}
+
+async function switchToMode(mode: Mode): Promise<HoloScene> {
+  if (settings.mode !== mode) {
+    settings = { ...settings, mode };
+    hud.setSettings(settings);
+    saveSettings(settings);
+  }
+  return setMode(mode);
 }
 
 // ---------- head sources ----------
@@ -170,18 +205,23 @@ const hud = createHud(document.body, settings, {
     if (prev.source !== next.source) void applySource();
   },
   async onImage(file) {
-    if (settings.mode !== 'photo') {
-      settings = { ...settings, mode: 'photo' };
-      hud.setSettings(settings);
-      saveSettings(settings);
-      await setMode('photo');
-    }
     try {
+      const photo = (await switchToMode('photo')) as PhotoScene;
       await photo.loadImage(file, (msg) => hud.setStatus(msg));
       hud.setStatus('Depth ready — look around!', 'ok');
     } catch (err) {
       console.error(err);
       hud.setStatus(`Could not process image: ${(err as Error).message}`, 'error');
+    }
+  },
+  async onModel(file) {
+    try {
+      const model = (await switchToMode('model')) as ModelScene;
+      await model.loadModel(file, (msg) => hud.setStatus(msg));
+      hud.setStatus('Model loaded — look around it!', 'ok');
+    } catch (err) {
+      console.error(err);
+      hud.setStatus(`Could not load model: ${(err as Error).message}`, 'error');
     }
   },
   onRecenter() {

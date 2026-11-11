@@ -45,7 +45,17 @@ export interface HeadSource {
   getPose(): HeadPose;
 }
 
-export type Mode = 'room' | 'photo';
+/** Every scene the app can show. Order here = order in the HUD's mode picker. */
+export const MODES = ['room', 'space', 'aquarium', 'photo', 'model'] as const;
+export type Mode = (typeof MODES)[number];
+
+export const MODE_LABELS: Record<Mode, string> = {
+  room: 'Room',
+  space: 'Space',
+  aquarium: 'Aquarium',
+  photo: 'Photo',
+  model: '3D model',
+};
 export type SourceKind = 'face' | 'mouse';
 
 export interface Settings {
