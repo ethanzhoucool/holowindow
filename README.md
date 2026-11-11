@@ -8,7 +8,7 @@
 
 Webcam head tracking + off-axis projection turn any display into a window into a 3D space, right in your browser.
 
-### [Try it live](https://ethanzhoucool.github.io/holowindow/)
+### [Try it live](https://ethanzhou.ca/holowindow/)
 
 </div>
 
