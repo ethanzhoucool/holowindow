@@ -1,0 +1,23 @@
+{
+  "name": "holowindow",
+  "version": "0.1.0",
+  "description": "Turn your screen into a 3D window with webcam head tracking. Runs entirely in the browser.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.2",
+    "@mediapipe/tasks-vision": "^1.2.2",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.187.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  }
+}
