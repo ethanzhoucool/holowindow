@@ -60,7 +60,8 @@ export class OneEuroFilter {
  * Units: positions are in cm, so beta is in 1/cm.
  */
 export function smoothingToParams(smoothing: number): OneEuroParams {
-  const s = Math.min(Math.max(smoothing, 0), 1);
+  // Non-finite input (e.g. a corrupted saved setting) would make every filter output NaN.
+  const s = Number.isFinite(smoothing) ? Math.min(Math.max(smoothing, 0), 1) : 0.5;
   return {
     minCutoff: 2.5 * Math.pow(0.04, s),
     beta: 1.0 * Math.pow(0.01, s),

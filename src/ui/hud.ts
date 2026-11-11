@@ -1,9 +1,32 @@
-import type { HeadPose, Mode, Settings, SourceKind } from '../types';
+import { DEFAULT_SETTINGS, MODES, MODE_LABELS, type HeadPose, type Mode, type Settings, type SourceKind } from '../types';
+import { createCalibrationWizard, diagonalIn } from './calibration';
 import type { Hud, HudCallbacks } from './contracts';
-import { h, icon, nextId, setIcon, type IconName } from './dom';
+import { h, icon, nextId, setIcon, trapTab, type IconName } from './dom';
 import { SCREEN_PRESETS, matchPreset } from './presets';
 
 const INTRO_KEY = 'holowindow:intro-dismissed:v1';
+const CALIBRATED_KEY = 'holowindow:calibrated:v1';
+const CALIB_NUDGE_KEY = 'holowindow:calibration-nudge:v1';
+const NUDGE_DELAY_MS = 2500;
+const NUDGE_MS = 15000;
+const RESET_CONFIRM_MS = 3000;
+
+const MODE_ICONS: Record<Mode, IconName> = {
+  room: 'room',
+  space: 'space',
+  aquarium: 'aquarium',
+  photo: 'photo',
+  model: 'model',
+};
+
+const MODEL_EXT = /\.(glb|gltf)$/i;
+const IMAGE_EXT = /\.(jpe?g|png|webp|gif|avif|bmp)$/i;
+
+function fileKind(file: File): 'model' | 'image' | null {
+  if (MODEL_EXT.test(file.name) || file.type.startsWith('model/gltf')) return 'model';
+  if (file.type.startsWith('image/') || (!file.type && IMAGE_EXT.test(file.name))) return 'image';
+  return null;
+}
 const IDLE_MS = 3000;
 const DEBUG_INTERVAL_MS = 100;
 
@@ -16,12 +39,24 @@ export function hasSeenIntro(): boolean {
   }
 }
 
-function rememberIntro(): void {
+function readFlag(key: string): boolean {
   try {
-    localStorage.setItem(INTRO_KEY, '1');
+    return localStorage.getItem(key) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function setFlag(key: string): void {
+  try {
+    localStorage.setItem(key, '1');
   } catch {
     /* storage unavailable */
   }
+}
+
+function rememberIntro(): void {
+  setFlag(INTRO_KEY);
 }
 
 function cloneSettings(s: Settings): Settings {
@@ -42,6 +77,8 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
   let settings = cloneSettings(initial);
   const controls: Control[] = [];
   let imageLoaded = false;
+  let modelLoaded = false;
+  let cameraLive = false;
 
   const commit = (patch: Partial<Settings>): void => {
     settings = { ...settings, ...patch, screen: { ...(patch.screen ?? settings.screen) } };
@@ -105,41 +142,80 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
   // ---------------------------------------------------------------- file input / upload
   const fileInput = h('input', {
     type: 'file',
-    accept: 'image/*',
+    accept: 'image/*,.glb,.gltf,model/gltf-binary,model/gltf+json',
     class: 'hw-visually-hidden',
     tabindex: -1,
     'aria-hidden': 'true',
   });
   fileInput.addEventListener('change', () => {
     const f = fileInput.files?.[0];
-    if (f) handleImage(f);
+    if (f) handleFile(f);
     fileInput.value = '';
   });
 
-  function handleImage(file: File): void {
-    if (!file.type.startsWith('image/')) {
-      setStatus(`"${file.name}" isn't an image. Try a JPG, PNG or WebP.`, 'error');
-      return;
-    }
-    imageLoaded = true;
-    if (settings.mode !== 'photo') {
-      // main.ts switches mode itself in onImage; mirror it locally so the toggle is right.
-      settings = { ...settings, mode: 'photo' };
-      syncAll();
-    }
-    cb.onImage(file);
+  /** main.ts switches mode itself in onImage / onModel; mirror it locally so the picker is right. */
+  function mirrorMode(mode: Mode): void {
+    if (settings.mode === mode) return;
+    settings = { ...settings, mode };
+    syncAll();
+  }
+
+  function rejectFile(name: string): void {
+    setStatus(`"${name}" isn't supported. Use an image (JPG, PNG, WebP) or a .glb / .gltf model.`, 'error');
+  }
+
+  function handleFile(file: File): void {
+    const kind = fileKind(file);
+    if (kind === 'model') {
+      modelLoaded = true;
+      mirrorMode('model');
+      cb.onModel(file);
+    } else if (kind === 'image') {
+      imageLoaded = true;
+      mirrorMode('photo');
+      cb.onImage(file);
+    } else rejectFile(file.name);
   }
 
   // ---------------------------------------------------------------- dock
-  const modeSeg = segmented<Mode>(
-    'Scene',
-    [
-      { value: 'room', text: 'Room', icon: 'room' },
-      { value: 'photo', text: 'Photo', icon: 'photo' },
-    ],
-    (s) => s.mode,
-    (v) => setMode(v),
+  const modeButtons = MODES.map((m, i) =>
+    h(
+      'button',
+      {
+        type: 'button',
+        class: 'hw-seg-btn hw-mode-btn',
+        title: `${MODE_LABELS[m]} (${i + 1})`,
+        'aria-keyshortcuts': String(i + 1),
+        onclick: () => {
+          if (settings.mode !== m) setMode(m);
+        },
+      },
+      icon(MODE_ICONS[m]),
+      h('span', { class: 'hw-mode-label' }, MODE_LABELS[m]),
+    ),
   );
+  const modeSeg = h('div', { class: 'hw-seg hw-mode-seg', role: 'group', 'aria-label': 'Scene' }, ...modeButtons);
+
+  // Under ~600px the segmented picker collapses into a native dropdown.
+  const modeSelectIcon = icon('room');
+  const modeSelect = h(
+    'select',
+    { class: 'hw-mode-select', 'aria-label': 'Scene' },
+    ...MODES.map((m) => h('option', { value: m }, MODE_LABELS[m])),
+  );
+  modeSelect.addEventListener('change', () => setMode(modeSelect.value as Mode));
+  const modeDrop = h('div', { class: 'hw-mode-drop' }, modeSelectIcon, modeSelect, h('span', { class: 'hw-mode-chev' }, icon('chevronDown')));
+  controls.push({
+    sync(s) {
+      modeButtons.forEach((b, i) => {
+        const on = s.mode === MODES[i];
+        b.setAttribute('aria-pressed', String(on));
+        b.classList.toggle('is-on', on);
+      });
+      modeSelect.value = s.mode;
+      setIcon(modeSelectIcon, MODE_ICONS[s.mode]);
+    },
+  });
   const sourceSeg = segmented<SourceKind>(
     'Head tracking source',
     [
@@ -158,9 +234,15 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
 
   const uploadBtn = h(
     'button',
-    { type: 'button', class: 'hw-btn hw-btn-accent', title: 'Upload an image (or drop one anywhere)', onclick: () => fileInput.click() },
+    {
+      type: 'button',
+      class: 'hw-btn hw-btn-accent',
+      'aria-label': 'Upload an image or 3D model',
+      title: 'Upload an image or .glb model (or drop one anywhere)',
+      onclick: () => fileInput.click(),
+    },
     icon('upload'),
-    h('span', { class: 'hw-label' }, 'Upload image'),
+    h('span', { class: 'hw-label' }, 'Upload'),
   );
   const recenterBtn = iconButton('recenter', 'Recenter', () => recenter(), 'R');
   const fsBtn = iconButton('fullscreen', 'Enter fullscreen', () => cb.onToggleFullscreen(), 'F');
@@ -170,6 +252,7 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
     'div',
     { class: 'hw-dock hw-glass', role: 'toolbar', 'aria-label': 'HoloWindow controls' },
     modeSeg,
+    modeDrop,
     h('span', { class: 'hw-sep', 'aria-hidden': 'true' }),
     sourceSeg,
     h('span', { class: 'hw-sep', 'aria-hidden': 'true' }),
@@ -278,6 +361,67 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
     },
   });
 
+  const calibrateBtn = h(
+    'button',
+    { type: 'button', class: 'hw-btn hw-btn-outline hw-btn-block', onclick: () => openCalibration(calibrateBtn) },
+    icon('card'),
+    'Calibrate with a card…',
+  );
+  const screenSummary = h('p', { class: 'hw-hint' });
+  controls.push({
+    sync(s) {
+      screenSummary.textContent = `${diagonalIn(s.screen).toFixed(1)}″ diagonal. Accurate size is what makes the illusion line up.`;
+    },
+  });
+
+  const depthField = slider({
+    label: 'Photo depth',
+    min: 2,
+    max: 40,
+    step: 0.5,
+    get: (s) => s.depthScale,
+    set: (v) => commit({ depthScale: v }),
+    format: (v) => `${v.toFixed(1)} cm`,
+    hint: 'How far the photo relief extends into the screen.',
+  });
+  const depthNote = h('p', { class: 'hw-hint' }, 'Switch to Photo mode for relief depth.');
+  controls.push({
+    sync(s) {
+      depthField.hidden = s.mode !== 'photo';
+      depthNote.hidden = s.mode === 'photo';
+    },
+  });
+
+  let resetArmed = 0;
+  const resetLabel = h('span', {}, 'Reset to defaults');
+  const resetBtn = h(
+    'button',
+    {
+      type: 'button',
+      class: 'hw-btn hw-btn-ghost',
+      onclick: () => {
+        if (!resetArmed) {
+          resetLabel.textContent = 'Click again to reset';
+          resetBtn.classList.add('is-armed');
+          resetArmed = window.setTimeout(disarmReset, RESET_CONFIRM_MS);
+          return;
+        }
+        disarmReset();
+        // Keep the current scene and tracking source: resetting shouldn't pop a camera prompt.
+        commit({ ...DEFAULT_SETTINGS, screen: { ...DEFAULT_SETTINGS.screen }, mode: settings.mode, source: settings.source });
+        setStatus('Settings reset to defaults.', 'ok');
+      },
+    },
+    icon('reset'),
+    resetLabel,
+  );
+  function disarmReset(): void {
+    window.clearTimeout(resetArmed);
+    resetArmed = 0;
+    resetLabel.textContent = 'Reset to defaults';
+    resetBtn.classList.remove('is-armed');
+  }
+
   const panelId = nextId('hw-settings');
   const panelTitleId = nextId('hw-settings-title');
   const closeSettingsBtn = iconButton('close', 'Close settings', () => toggleSettings(false));
@@ -291,34 +435,27 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
       h(
         'fieldset',
         { class: 'hw-group' },
-        h('legend', {}, 'Your screen'),
-        h('div', { class: 'hw-field' }, h('label', { for: presetId }, 'Preset'), presetSelect),
+        h('legend', {}, 'Display'),
+        h('div', { class: 'hw-field' }, h('label', { for: presetId }, 'Screen size'), presetSelect),
         h(
           'div',
           { class: 'hw-row' },
           numberInput('Width', (s) => s.screen.widthCm, (v) => commit({ screen: { ...settings.screen, widthCm: v } })),
           numberInput('Height', (s) => s.screen.heightCm, (v) => commit({ screen: { ...settings.screen, heightCm: v } })),
         ),
+        screenSummary,
+        calibrateBtn,
         h(
-          'p',
-          { class: 'hw-hint' },
-          'Measure the lit area of the display (not the bezel) with a ruler. Accurate size is what makes the illusion line up.',
+          'div',
+          { class: 'hw-switch-row' },
+          h('label', { for: debugId }, 'Debug overlay', h('span', { class: 'hw-hint' }, 'Webcam preview, head position, FPS')),
+          debugToggle,
         ),
       ),
       h(
         'fieldset',
         { class: 'hw-group' },
         h('legend', {}, 'Tracking'),
-        slider({
-          label: 'Motion gain',
-          min: 0.5,
-          max: 3,
-          step: 0.05,
-          get: (s) => s.motionGain,
-          set: (v) => commit({ motionGain: v }),
-          format: (v) => `${v.toFixed(2)}×`,
-          hint: '1× is physically correct. Higher exaggerates the parallax.',
-        }),
         slider({
           label: 'Smoothing',
           min: 0,
@@ -350,36 +487,35 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
       h(
         'fieldset',
         { class: 'hw-group' },
-        h('legend', {}, 'Photo'),
+        h('legend', {}, 'Effect'),
         slider({
-          label: 'Depth',
-          min: 2,
-          max: 40,
-          step: 0.5,
-          get: (s) => s.depthScale,
-          set: (v) => commit({ depthScale: v }),
-          format: (v) => `${v.toFixed(1)} cm`,
-          hint: 'How far the photo relief extends into the screen.',
+          label: 'Motion gain',
+          min: 0.5,
+          max: 3,
+          step: 0.05,
+          get: (s) => s.motionGain,
+          set: (v) => commit({ motionGain: v }),
+          format: (v) => `${v.toFixed(2)}×`,
+          hint: '1× is physically correct. Higher exaggerates the parallax.',
         }),
-      ),
-      h(
-        'div',
-        { class: 'hw-switch-row' },
-        h('label', { for: debugId }, 'Debug overlay', h('span', { class: 'hw-hint' }, 'Webcam preview, head position, FPS')),
-        debugToggle,
+        depthField,
+        depthNote,
       ),
       h(
         'dl',
         { class: 'hw-keys', 'aria-label': 'Keyboard shortcuts' },
         ...(
           [
+            ['Space', 'Next scene'],
+            ['1–5', 'Jump to scene'],
             ['H', 'Hide / show controls'],
             ['F', 'Fullscreen'],
             ['R', 'Recenter'],
-            ['Space', 'Switch Room / Photo'],
+            ['Esc', 'Close panel / dialog'],
           ] as const
         ).flatMap(([k, d]) => [h('dt', {}, h('kbd', {}, k)), h('dd', {}, d)]),
       ),
+      h('div', { class: 'hw-panel-foot' }, resetBtn),
     ),
   );
   settingsBtn.setAttribute('aria-controls', panelId);
@@ -391,6 +527,7 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
     panel.hidden = !settingsOpen;
     settingsBtn.setAttribute('aria-expanded', String(settingsOpen));
     settingsBtn.classList.toggle('is-on', settingsOpen);
+    if (!settingsOpen) disarmReset();
     if (settingsOpen) wake();
     else if (panel.contains(document.activeElement)) settingsBtn.focus();
   }
@@ -451,6 +588,7 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
 
   let lastDebugWrite = 0;
   function update(pose: HeadPose, fps: number): void {
+    wizard.updatePose(pose);
     if (!settings.showDebug) return;
     const now = performance.now();
     if (now - lastDebugWrite < DEBUG_INTERVAL_MS) return;
@@ -471,6 +609,67 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
     void video.play().catch(() => {
       /* autoplay may be blocked until interaction; the tracker owns playback anyway */
     });
+    if (!cameraLive) {
+      cameraLive = true;
+      // Let main.ts's "tracking" toast land first, then offer calibration once.
+      window.setTimeout(maybeNudgeCalibration, NUDGE_DELAY_MS);
+    }
+  }
+
+  // ---------------------------------------------------------------- calibration wizard
+  const wizard = createCalibrationWizard({
+    getSettings: () => cloneSettings(settings),
+    onSave(screen) {
+      setFlag(CALIBRATED_KEY);
+      commit({ screen });
+      setStatus(`Screen set to ${screen.widthCm.toFixed(1)} × ${screen.heightCm.toFixed(1)} cm (${diagonalIn(screen).toFixed(1)}″).`, 'ok');
+    },
+    onFov: (deg) => commit({ cameraFovDeg: deg }),
+    onStartCamera: () => startCamera(),
+    isCameraLive: () => cameraLive,
+    onClose() {
+      wake();
+    },
+  });
+  root.appendChild(wizard.el);
+
+  function openCalibration(returnFocus: HTMLElement | null = null): void {
+    hideNudge();
+    setFlag(CALIB_NUDGE_KEY);
+    wizard.open(returnFocus);
+  }
+
+  function startCamera(): void {
+    if (introOpen) closeIntro();
+    settings = { ...settings, source: 'face' };
+    syncAll();
+    cb.onStartCamera();
+  }
+
+  // One-time nudge after the camera first starts. Separate from the status toast so
+  // main.ts's own status messages don't overwrite it.
+  const nudgeText = h('span', { class: 'hw-nudge-text' }, 'Calibrate your screen size for the best effect.');
+  const nudgeGo = h('button', { type: 'button', class: 'hw-btn hw-btn-primary hw-btn-small', onclick: () => openCalibration() }, 'Calibrate');
+  const nudgeClose = h('button', { type: 'button', class: 'hw-status-close', 'aria-label': 'Dismiss', onclick: () => hideNudge() }, icon('close'));
+  const nudge = h('div', { class: 'hw-nudge hw-glass', role: 'region', 'aria-label': 'Calibration suggestion' }, icon('card'), nudgeText, nudgeGo, nudgeClose);
+  root.appendChild(nudge);
+  let nudgeTimer = 0;
+  function hideNudge(): void {
+    window.clearTimeout(nudgeTimer);
+    nudge.classList.remove('is-visible');
+  }
+  function maybeNudgeCalibration(): void {
+    if (readFlag(CALIB_NUDGE_KEY) || readFlag(CALIBRATED_KEY) || wizard.isOpen() || introOpen) return;
+    setFlag(CALIB_NUDGE_KEY);
+    nudge.classList.add('is-visible');
+    const schedule = (): void => {
+      window.clearTimeout(nudgeTimer);
+      nudgeTimer = window.setTimeout(() => {
+        if (nudge.contains(document.activeElement) || nudge.matches(':hover')) schedule();
+        else hideNudge();
+      }, NUDGE_MS);
+    };
+    schedule();
   }
 
   // ---------------------------------------------------------------- intro overlay
@@ -492,12 +691,7 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
       {
         type: 'button',
         class: 'hw-cta',
-        onclick: () => {
-          closeIntro();
-          settings = { ...settings, source: 'face' };
-          syncAll();
-          cb.onStartCamera();
-        },
+        onclick: () => startCamera(),
       },
       icon('camera'),
       'Enable camera',
@@ -514,6 +708,12 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
       },
       'Use mouse instead',
     );
+    const calibLink = h(
+      'button',
+      { type: 'button', class: 'hw-link hw-link-small hw-intro-calib', onclick: () => openCalibration(calibLink) },
+      icon('card'),
+      'Calibrate screen for best effect',
+    );
     introEl = h(
       'div',
       { class: 'hw-intro', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId },
@@ -529,32 +729,26 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
         ),
         h('p', { class: 'hw-privacy' }, icon('lock'), 'Your camera feed never leaves your device. Everything runs locally in your browser.'),
         h('div', { class: 'hw-intro-actions' }, enableBtn, mouseBtn),
+        calibLink,
         h('p', { class: 'hw-hint' }, 'Tip: close one eye. It looks even more real.'),
       ),
     );
     root.appendChild(introEl);
     introOpen = true;
     requestAnimationFrame(() => enableBtn.focus());
-    // Simple focus trap between the two buttons.
-    introEl.addEventListener('keydown', (e) => {
-      if (e.key !== 'Tab') return;
-      const first = enableBtn;
-      const last = mouseBtn;
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    });
   }
 
   // ---------------------------------------------------------------- drag & drop
   const dropOverlay = h(
     'div',
     { class: 'hw-drop', 'aria-hidden': 'true' },
-    h('div', { class: 'hw-drop-inner' }, icon('photo'), h('p', {}, 'Drop an image to make it 3D')),
+    h(
+      'div',
+      { class: 'hw-drop-inner' },
+      icon('upload'),
+      h('p', {}, 'Drop an image or .glb model'),
+      h('span', { class: 'hw-hint' }, 'Images become 3D reliefs. Models float behind the glass.'),
+    ),
   );
   root.appendChild(dropOverlay);
   let dragDepth = 0;
@@ -581,9 +775,9 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
     dragDepth = 0;
     dropOverlay.classList.remove('is-visible');
     const files = Array.from(e.dataTransfer?.files ?? []);
-    const img = files.find((f) => f.type.startsWith('image/'));
-    if (img) handleImage(img);
-    else if (files.length) setStatus('That file isn’t an image. Try a JPG, PNG or WebP.', 'error');
+    const usable = files.find((f) => fileKind(f) !== null);
+    if (usable) handleFile(usable);
+    else if (files.length) rejectFile(files[0].name);
   });
 
   // ---------------------------------------------------------------- auto-hide & keyboard
@@ -594,7 +788,7 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
   function applyVisibility(idle: boolean): void {
     const hide = manuallyHidden || (idle && !settingsOpen && !pointerInChrome && !chrome.contains(document.activeElement));
     chrome.classList.toggle('is-hidden', hide);
-    document.documentElement.classList.toggle('hw-idle', hide && !introOpen);
+    document.documentElement.classList.toggle('hw-idle', hide && !introOpen && !wizard.isOpen());
   }
   function wake(): void {
     applyVisibility(false);
@@ -611,7 +805,8 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
 
   function setMode(mode: Mode): void {
     commit({ mode });
-    if (mode === 'photo' && !imageLoaded) setStatus('Drop an image anywhere, or press Upload image.', 'info');
+    if (mode === 'photo' && !imageLoaded) setStatus('Drop an image anywhere, or press Upload', 'info');
+    else if (mode === 'model' && !modelLoaded) setStatus('Drop a .glb file anywhere, or press Upload', 'info');
   }
   function recenter(): void {
     cb.onRecenter();
@@ -620,11 +815,21 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
 
   window.addEventListener('keydown', (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (wizard.isOpen()) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        wizard.cancel();
+      } else wizard.trap(e);
+      return;
+    }
+    if (introOpen) {
+      if (introEl) trapTab(introEl, e);
+      return;
+    }
     if (e.key === 'Escape' && settingsOpen) {
       toggleSettings(false);
       return;
     }
-    if (introOpen) return;
     if (e.key === 'Tab') wake();
     if (isTypingTarget(e.target)) return;
     switch (e.key.toLowerCase()) {
@@ -643,10 +848,15 @@ export function createHud(parent: HTMLElement, initial: Settings, cb: HudCallbac
       case ' ':
         if (e.repeat) return;
         e.preventDefault();
-        setMode(settings.mode === 'room' ? 'photo' : 'room');
+        setMode(MODES[(MODES.indexOf(settings.mode) + 1) % MODES.length]);
         break;
-      default:
+      default: {
+        const n = Number(e.key);
+        if (Number.isInteger(n) && n >= 1 && n <= MODES.length && !e.repeat) {
+          if (MODES[n - 1] !== settings.mode) setMode(MODES[n - 1]);
+        }
         return;
+      }
     }
   });
 

@@ -37,7 +37,17 @@ export function h<K extends keyof HTMLElementTagNameMap>(
 }
 
 const ICONS = {
-  room: '<path d="M12 3 3 7.5v9L12 21l9-4.5v-9L12 3Z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/>',
+  room: '<rect x="3" y="3" width="18" height="18" rx="2.5"/><rect x="8.5" y="8.5" width="7" height="7" rx="0.5"/><path d="m3.8 3.8 4.7 4.7M20.2 3.8l-4.7 4.7M3.8 20.2l4.7-4.7M20.2 20.2l-4.7-4.7"/>',
+  space: '<circle cx="11" cy="13" r="5"/><path d="M5.2 16.4C3 18.3 2.4 19.8 3 20.4c1.2 1.2 6.3-1.4 11.3-6.4s7.6-10.1 6.4-11.3c-.6-.6-2.1 0-4 2.2"/><path d="M19 15.5v3M17.5 17h3"/>',
+  aquarium: '<path d="M3 12c2.5-4 8.5-5.5 12.5-2L21 6.5v11L15.5 14C11.5 17.5 5.5 16 3 12Z"/><circle cx="8" cy="11.3" r="0.9" fill="currentColor"/>',
+  model: '<path d="M12 3 3 7.5v9L12 21l9-4.5v-9L12 3Z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/>',
+  card: '<rect x="2.5" y="5.5" width="19" height="13" rx="2.2"/><rect x="5.5" y="9" width="4" height="3" rx="0.6"/><path d="M5.5 15h7"/>',
+  reset: '<path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3"/><path d="M4.5 4.5v4h4"/>',
+  chevronDown: '<path d="m6 9 6 6 6-6"/>',
+  arrowLeft: '<path d="M19 12H5m0 0 6-6m-6 6 6 6"/>',
+  arrowRight: '<path d="M5 12h14m0 0-6-6m6 6-6 6"/>',
+  minus: '<path d="M6 12h12"/>',
+  plus: '<path d="M12 6v12M6 12h12"/>',
   photo: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="1.8"/><path d="m21 15.5-4.5-4.5L7 20"/>',
   face: '<circle cx="12" cy="12" r="9"/><path d="M9 10h.01M15 10h.01M8.5 14.5a4.5 4.5 0 0 0 7 0"/>',
   mouse: '<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 7v4"/>',
@@ -63,4 +73,37 @@ export function icon(name: IconName): HTMLSpanElement {
 export function setIcon(span: HTMLElement, name: IconName): void {
   const svg = span.querySelector('svg');
   if (svg) svg.innerHTML = ICONS[name];
+}
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** Visible, focusable descendants of `root`, in DOM order. */
+export function focusableIn(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+    (el) => el.tabIndex >= 0 && el.getClientRects().length > 0,
+  );
+}
+
+/** Keeps Tab / Shift+Tab cycling inside `root`. Call from a keydown handler. */
+export function trapTab(root: HTMLElement, e: KeyboardEvent): void {
+  if (e.key !== 'Tab') return;
+  const items = focusableIn(root);
+  if (!items.length) {
+    e.preventDefault();
+    return;
+  }
+  const first = items[0];
+  const last = items[items.length - 1];
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !root.contains(active)) {
+    e.preventDefault();
+    (e.shiftKey ? last : first).focus();
+  } else if (e.shiftKey && active === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && active === last) {
+    e.preventDefault();
+    first.focus();
+  }
 }

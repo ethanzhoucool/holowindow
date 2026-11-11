@@ -1,23 +1,14 @@
-import {
-  FaceLandmarker,
-  FilesetResolver,
-  type FaceLandmarkerResult,
-  type NormalizedLandmark,
-} from '@mediapipe/tasks-vision';
+// Type-only: the runtime module is loaded with a dynamic import in start() so it is code-split
+// out of the main bundle and only downloaded when the camera is enabled.
+import type { FaceLandmarker, FaceLandmarkerResult } from '@mediapipe/tasks-vision';
 import { DEFAULT_POSE, type HeadPose, type HeadSource, type Settings } from '../types';
 import { OneEuroFilter, smoothingToParams } from './oneEuroFilter';
+import { estimateHeadPosition, nextDetectTimestamp, type Vec3 } from './poseMath';
 
 /** Must match the installed @mediapipe/tasks-vision version (see package.json). */
 const WASM_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.2/wasm';
 const MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
-
-// Landmark indices (MediaPipe face mesh, 478-point model with irises).
-const IRIS_A = 468;
-const IRIS_B = 473;
-// Eye corners, used when iris landmarks are missing.
-const EYE_A_CORNERS = [33, 133] as const;
-const EYE_B_CORNERS = [362, 263] as const;
 
 /** After the face disappears, hold the last pose this long before easing away (ms). */
 const LOST_GRACE_MS = 150;
@@ -27,12 +18,6 @@ const LOST_EASE_TAU = 0.33;
 const CONFIDENCE_TAU = 0.35;
 /** When the face comes back, blend from the eased pose to the tracked one over this long (ms). */
 const REACQUIRE_BLEND_MS = 300;
-
-interface Vec3 {
-  x: number;
-  y: number;
-  z: number;
-}
 
 type FrameLoopHandle = { kind: 'rvfc'; id: number } | { kind: 'raf'; id: number };
 
@@ -66,11 +51,16 @@ export class FaceTracker implements HeadSource {
 
   private stream: MediaStream | null = null;
   private landmarker: FaceLandmarker | null = null;
+  /** In-flight (or settled) landmarker creation; cleared on failure so a later start() retries. */
+  private landmarkerPromise: Promise<FaceLandmarker> | null = null;
   private startPromise: Promise<void> | null = null;
   private running = false;
   /** Bumped on every start/stop so stale async work and loops bail out. */
   private generation = 0;
   private loop: FrameLoopHandle | null = null;
+  /** Detection is suspended while the tab is hidden. */
+  private paused = false;
+  private visibilityListening = false;
   private lastVideoTime = -1;
   private lastDetectTs = 0;
   private detectErrorLogged = false;
@@ -130,7 +120,9 @@ export class FaceTracker implements HeadSource {
   stop(): void {
     this.generation++;
     this.running = false;
+    this.paused = false;
     this.cancelLoop();
+    this.setVisibilityListener(false);
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
     this.video.srcObject = null;
@@ -188,6 +180,11 @@ export class FaceTracker implements HeadSource {
       throw new Error('Camera API unavailable (page must be served over HTTPS or localhost)');
     }
 
+    // Start fetching the library + model now so the download overlaps the permission prompt.
+    // loadLandmarker() attaches its own rejection handler, so a camera failure below that
+    // abandons this promise can't surface as an unhandled rejection.
+    const landmarkerReady = this.loadLandmarker();
+
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -227,19 +224,41 @@ export class FaceTracker implements HeadSource {
     if (gen !== this.generation) throw new Error('Face tracking was stopped while starting');
 
     try {
-      this.landmarker ??= await this.createLandmarker();
+      this.landmarker = await landmarkerReady;
     } catch (err) {
-      this.stop();
+      if (gen === this.generation) this.stop();
       throw new Error(`Could not load face model: ${err instanceof Error ? err.message : String(err)}`);
     }
     if (gen !== this.generation) throw new Error('Face tracking was stopped while starting');
 
     this.running = true;
     this.lastVideoTime = -1;
+    this.setVisibilityListener(true);
+    this.paused = document.hidden;
     this.scheduleNext(gen);
   }
 
+  /** Shared, cached landmarker creation. Never produces an unhandled rejection on its own. */
+  private loadLandmarker(): Promise<FaceLandmarker> {
+    if (this.landmarker) return Promise.resolve(this.landmarker);
+    if (!this.landmarkerPromise) {
+      const p = this.createLandmarker();
+      this.landmarkerPromise = p;
+      p.then(
+        (lm) => {
+          // Kept across stop()/start() so a restart doesn't re-download the model.
+          this.landmarker = lm;
+        },
+        () => {
+          if (this.landmarkerPromise === p) this.landmarkerPromise = null;
+        },
+      );
+    }
+    return this.landmarkerPromise;
+  }
+
   private async createLandmarker(): Promise<FaceLandmarker> {
+    const { FaceLandmarker, FilesetResolver } = await import('@mediapipe/tasks-vision');
     const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
     const make = (delegate: 'GPU' | 'CPU'): Promise<FaceLandmarker> =>
       FaceLandmarker.createFromOptions(fileset, {
@@ -258,10 +277,39 @@ export class FaceTracker implements HeadSource {
     }
   }
 
+  // ---------- tab visibility ----------
+
+  private setVisibilityListener(on: boolean): void {
+    if (on === this.visibilityListening) return;
+    this.visibilityListening = on;
+    if (on) document.addEventListener('visibilitychange', this.onVisibilityChange);
+    else document.removeEventListener('visibilitychange', this.onVisibilityChange);
+  }
+
+  private readonly onVisibilityChange = (): void => {
+    if (!this.running) return;
+    if (document.hidden) {
+      if (this.paused) return;
+      this.paused = true;
+      this.cancelLoop();
+      // Treat the hidden period as a face loss so the return re-acquires and blends smoothly.
+      this.faceVisible = false;
+    } else {
+      if (!this.paused) return;
+      this.paused = false;
+      const gen = this.generation;
+      // Some browsers pause media in background tabs; make sure frames are flowing again.
+      if (this.video.paused) this.video.play().catch(() => {});
+      this.lastVideoTime = -1;
+      this.cancelLoop();
+      this.scheduleNext(gen);
+    }
+  };
+
   // ---------- frame loop ----------
 
   private scheduleNext(gen: number): void {
-    if (gen !== this.generation || !this.running) return;
+    if (gen !== this.generation || !this.running || this.paused) return;
     const video = this.video;
     if (typeof video.requestVideoFrameCallback === 'function') {
       // Fires exactly once per new decoded camera frame — lowest latency, no wasted work.
@@ -292,12 +340,12 @@ export class FaceTracker implements HeadSource {
   private processFrame(gen: number): void {
     const lm = this.landmarker;
     const video = this.video;
-    if (gen !== this.generation || !lm || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+    if (gen !== this.generation || this.paused || !lm || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
     if (!video.videoWidth || !video.videoHeight) return;
 
     // detectForVideo requires strictly increasing timestamps (ms).
     const now = performance.now();
-    const ts = Math.max(now, this.lastDetectTs + 1);
+    const ts = nextDetectTimestamp(now, this.lastDetectTs);
     this.lastDetectTs = ts;
 
     let result: FaceLandmarkerResult;
@@ -311,7 +359,13 @@ export class FaceTracker implements HeadSource {
       return;
     }
 
-    const raw = this.estimate(result, video.videoWidth, video.videoHeight);
+    const raw = estimateHeadPosition(
+      result.faceLandmarks[0],
+      video.videoWidth,
+      video.videoHeight,
+      this.settings,
+      result.facialTransformationMatrixes?.[0]?.data,
+    );
     if (!raw) {
       this.faceVisible = false;
       return;
@@ -333,95 +387,4 @@ export class FaceTracker implements HeadSource {
     this.faceVisible = true;
     this.lastSeenMs = now;
   }
-
-  // ---------- pose math ----------
-
-  /**
-   * Raw (unfiltered) cyclopean-eye position, monitor-centred, in cm. null if no usable face.
-   *
-   * Pinhole model with the principal point at the image centre:
-   *   f   = (W/2) / tan(hFov/2)                          focal length in px
-   *   z   = f * ipdCm / ipdPx                            distance from camera (cm)
-   *   X_c = (u - cx) * z / f,  Y_c = (v - cy) * z / f    camera-image axes (u right, v DOWN)
-   *
-   * SIGNS. getUserMedia frames are NOT mirrored: the camera looks at the viewer, so the
-   * viewer's right side appears on the LEFT of the image. Image +u therefore points toward
-   * the viewer's LEFT, i.e. world -x:   x = -(u - cx) * z / f.
-   * Image +v points down, world +y is up:  y = -(v - cy) * z / f.
-   * The camera lens sits in the screen plane, so the camera's depth is the world z directly.
-   *
-   * The camera is at the top-centre of the monitor, cameraOffsetYcm above the top edge, so
-   * to get monitor-centred coordinates we add the distance from monitor centre to camera:
-   *   y_monitor = y_cam + screen.heightCm/2 + cameraOffsetYcm.   (x needs no shift.)
-   */
-  private estimate(result: FaceLandmarkerResult, W: number, H: number): Vec3 | null {
-    const lms = result.faceLandmarks[0];
-    if (!lms || lms.length < 468) return null;
-
-    let a: NormalizedLandmark;
-    let b: NormalizedLandmark;
-    if (lms.length > IRIS_B) {
-      a = lms[IRIS_A];
-      b = lms[IRIS_B];
-    } else {
-      a = midpoint(lms[EYE_A_CORNERS[0]], lms[EYE_A_CORNERS[1]]);
-      b = midpoint(lms[EYE_B_CORNERS[0]], lms[EYE_B_CORNERS[1]]);
-    }
-
-    // Pixel-space eye vector (normalised coords are relative to width / height separately).
-    const dxPx = (b.x - a.x) * W;
-    const dyPx = (b.y - a.y) * H;
-    const ipdPx2d = Math.hypot(dxPx, dyPx);
-    if (!(ipdPx2d > 4)) return null;
-
-    // Undo foreshortening from head yaw (and pitch) so turning the head doesn't fake depth.
-    const fore = this.foreshortening(result, a, b, W, H);
-    const ipdPx = ipdPx2d / fore;
-
-    const fovRad = (Math.min(Math.max(this.settings.cameraFovDeg, 20), 150) * Math.PI) / 180;
-    const f = W / 2 / Math.tan(fovRad / 2);
-    const z = Math.min(Math.max((f * this.settings.ipdCm) / ipdPx, 10), 400);
-
-    const u = ((a.x + b.x) / 2) * W;
-    const v = ((a.y + b.y) / 2) * H;
-    const xCam = (-(u - W / 2) * z) / f;
-    const yCam = (-(v - H / 2) * z) / f;
-
-    const x = xCam;
-    const y = yCam + this.settings.screen.heightCm / 2 + this.settings.cameraOffsetYcm;
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
-    return { x, y, z };
-  }
-
-  /**
-   * Fraction (0.5..1) of the true inter-eye distance that is visible in the image plane.
-   * Preferred: the face transform's local x axis (column 0 of the column-major 4x4 matrix,
-   * expressed in camera space): its in-image share |(r0, r1)| / |(r0, r1, r2)| is cos of the
-   * out-of-plane rotation. Fallback: landmark z (same scale as normalised x) for the 3D eye vector.
-   * Clamped so extreme turns can't blow up the estimate.
-   */
-  private foreshortening(
-    result: FaceLandmarkerResult,
-    a: NormalizedLandmark,
-    b: NormalizedLandmark,
-    W: number,
-    H: number,
-  ): number {
-    let c = 1;
-    const m = result.facialTransformationMatrixes?.[0]?.data;
-    if (m && m.length >= 16) {
-      const inPlane = Math.hypot(m[0], m[1]);
-      const full = Math.hypot(m[0], m[1], m[2]);
-      if (full > 1e-6) c = inPlane / full;
-    } else {
-      const d2 = Math.hypot((b.x - a.x) * W, (b.y - a.y) * H);
-      const d3 = Math.hypot(d2, (b.z - a.z) * W);
-      if (d3 > 1e-6) c = d2 / d3;
-    }
-    return Number.isFinite(c) ? Math.min(Math.max(c, 0.5), 1) : 1;
-  }
-}
-
-function midpoint(p: NormalizedLandmark, q: NormalizedLandmark): NormalizedLandmark {
-  return { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2, z: (p.z + q.z) / 2, visibility: 0 };
 }

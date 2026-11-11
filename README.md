@@ -51,24 +51,28 @@ A normal 3D renderer assumes your eye sits at a fixed point, dead centre in fron
 
 ## Features
 
-- **Room mode**: a neon grid-walled box with floating objects that sits *behind* your screen.
-- **Photo mode**: turn any photo into a 3D relief with in-browser monocular depth estimation.
+- **Five scenes**, picked from the dock:
+  - **Room**: a neon grid-walled box with floating objects that sits *behind* your screen.
+  - **Space**: a star field, nebula and ringed planet, with objects drifting out past the glass.
+  - **Aquarium**: a fish tank behind your screen.
+  - **Photo**: turn any photo into a 3D relief with in-browser monocular depth estimation.
+  - **3D model**: drop in a `.glb` / `.gltf` and it sits on a turntable behind the glass.
+- **Drag and drop anywhere**: images go to Photo mode, `.glb` / `.gltf` files to 3D model mode. Or use the Upload button.
+- **Calibration wizard**: hold a credit card to the screen and resize an outline to match it; HoloWindow works out your physical screen size from that. No card? Enter the diagonal instead. A second, optional step checks the distance the tracker reads and helps you tune the webcam field of view.
 - **Face or mouse**: webcam head tracking, or a mouse fallback when you don't want to use the camera.
-- **Physically calibrated**: set your real screen size and the geometry lines up.
 - **Private**: no server, no uploads, no analytics.
 - **Minimal UI**: a glassy control dock that hides itself after a few seconds.
 
 ### Keyboard shortcuts
 
-| Key     | Action                     |
-| ------- | -------------------------- |
-| `H`     | Hide / show the controls   |
-| `F`     | Fullscreen                 |
-| `R`     | Recenter head position     |
-| `Space` | Switch between Room / Photo |
-| `Esc`   | Close settings             |
-
-You can also drop an image anywhere on the page to switch to photo mode.
+| Key       | Action                         |
+| --------- | ------------------------------ |
+| `Space`   | Next scene                     |
+| `1`–`5`   | Jump to a scene (Room … 3D model) |
+| `H`       | Hide / show the controls       |
+| `F`       | Fullscreen                     |
+| `R`       | Recenter head position         |
+| `Esc`     | Close settings / calibration   |
 
 ## Quick start
 
@@ -93,16 +97,16 @@ npm run typecheck
 
 The illusion is only as good as the geometry. In order of impact:
 
-1. **Set your screen size.** Open Settings and pick a preset, or measure the lit area of the display with a ruler (width × height in cm).
+1. **Set your screen size.** Open Settings → *Calibrate with a card…* and match the outline to any credit or ID card. Or pick a preset, or measure the lit area of the display with a ruler (width × height in cm).
 2. **Go fullscreen** (`F`). Then the viewport is exactly the screen and nothing is offset by browser chrome.
 3. **Sit 50–70 cm away**, roughly centred, and press `R` to recenter.
 4. **Light your face.** A lamp in front of you beats a window behind you. Tracking gets jittery in the dark. Raise *Smoothing* if it shakes.
 5. **Close one eye.** Your brain loses its stereo cue that the screen is flat, and the depth becomes startlingly real.
-6. Still feels off? Adjust *Webcam field of view* (most laptop cameras are 55–75°) until moving toward the screen feels 1:1. *Motion gain* above 1× exaggerates the effect for demos.
+6. Still feels off? Step 2 of the calibration wizard shows the distance the tracker reads; adjust *Webcam field of view* (most laptop cameras are 55–75°) until it matches reality. *Motion gain* above 1× exaggerates the effect for demos.
 
 ## Privacy
 
-Your camera feed never leaves your device. Face tracking and depth estimation both run locally in your browser. There is no backend. The only network requests are for the app itself and the model weights (face and depth models), which your browser caches. Images you drop in are processed in memory and never uploaded. Settings are stored in `localStorage`.
+Your camera feed never leaves your device. Face tracking and depth estimation both run locally in your browser. There is no backend. The only network requests are for the app itself and the model weights (face and depth models), which your browser caches. Images and models you drop in are processed in memory and never uploaded. Settings are stored in `localStorage`.
 
 ## Tech stack
 
@@ -114,8 +118,7 @@ Your camera feed never leaves your device. Face tracking and depth estimation bo
 
 ## Roadmap
 
-- [ ] More scenes (aquarium, space, a tiny diorama city)
-- [ ] glTF / GLB upload: drop in your own 3D model
+- [ ] More scenes (a tiny diorama city)
 - [ ] Stereoscopic mode for anaglyph and side-by-side 3D displays, without WebXR
 - [ ] Better depth for photos: inpainting the occluded regions behind foreground objects
 - [ ] Desktop wallpaper mode via Electron or Wallpaper Engine

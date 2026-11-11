@@ -10,6 +10,7 @@ import {
   DEFAULT_POSE,
   DEFAULT_SETTINGS,
   MODES,
+  MODE_LABELS,
   type HeadPose,
   type Mode,
   type HeadSource,
@@ -123,6 +124,8 @@ function getScene(mode: Mode): Promise<HoloScene> {
 
 async function setMode(mode: Mode): Promise<HoloScene> {
   const req = ++modeRequest;
+  const firstLoad = !scenes.has(mode);
+  if (firstLoad && active) hud.setStatus(`Loading ${MODE_LABELS[mode]}…`);
   const next = await getScene(mode);
   if (req !== modeRequest) return next; // a newer mode switch won
   if (next !== active) {
