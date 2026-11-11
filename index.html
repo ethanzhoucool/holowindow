@@ -2,11 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>HoloWindow</title>
-    <meta name="description" content="Turn your screen into a 3D window with webcam head tracking." />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>HoloWindow · turn your screen into a 3D window</title>
+    <meta name="description" content="Turn your screen into a 3D window with webcam head tracking. Runs entirely in your browser; your camera feed never leaves your device." />
+    <meta name="theme-color" content="#05060a" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <meta property="og:title" content="HoloWindow" />
+    <meta property="og:description" content="Your screen is a window. Look through it. Webcam head tracking + off-axis projection, all in the browser." />
+    <meta property="og:type" content="website" />
   </head>
   <body>
+    <noscript>HoloWindow needs JavaScript and WebGL to run.</noscript>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

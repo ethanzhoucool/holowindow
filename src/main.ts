@@ -5,7 +5,7 @@ import { FaceTracker } from './tracking/faceTracker';
 import { MouseSource } from './tracking/mouseSource';
 import { createRoomScene } from './scenes/roomScene';
 import { createPhotoScene, type PhotoScene } from './scenes/photoScene';
-import { createHud } from './ui/hud';
+import { createHud, hasSeenIntro } from './ui/hud';
 import {
   DEFAULT_POSE,
   DEFAULT_SETTINGS,
@@ -49,7 +49,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05060a);
@@ -118,32 +118,43 @@ const face = new FaceTracker(settings, video);
 const mouse = new MouseSource(canvas);
 let source: HeadSource = mouse;
 let faceStarted = false;
+let facePromise: Promise<void> | null = null;
 
-async function startFace(): Promise<void> {
-  if (faceStarted) return;
+function startFace(): Promise<void> {
+  if (faceStarted) return Promise.resolve();
+  if (facePromise) return facePromise;
   hud.setStatus('Starting camera and loading face model…');
-  try {
-    await face.start();
-    faceStarted = true;
-    hud.setVideo(video);
-    hud.setStatus('Tracking your face. Move your head!', 'ok');
-  } catch (err) {
-    console.error(err);
-    hud.setStatus(`Camera unavailable (${(err as Error).message}). Using mouse instead.`, 'error');
-    settings = { ...settings, source: 'mouse' };
-    hud.setSettings(settings);
-    saveSettings(settings);
-  }
+  facePromise = face
+    .start()
+    .then(() => {
+      faceStarted = true;
+      hud.setVideo(video);
+      hud.setStatus('Tracking your face. Move your head!', 'ok');
+    })
+    .catch((err: unknown) => {
+      console.error(err);
+      hud.setStatus(`Camera unavailable (${(err as Error).message}). Using mouse instead.`, 'error');
+      settings = { ...settings, source: 'mouse' };
+      hud.setSettings(settings);
+      saveSettings(settings);
+    })
+    .finally(() => {
+      facePromise = null;
+    });
+  return facePromise;
 }
 
 async function applySource(): Promise<void> {
+  await mouse.start();
   if (settings.source === 'face') {
-    await mouse.start();
     await startFace();
-    source = faceStarted ? face : mouse;
+    source = faceStarted && settings.source === 'face' ? face : mouse;
   } else {
-    await mouse.start();
     source = mouse;
+    if (faceStarted) {
+      face.stop(); // turn the camera light off
+      faceStarted = false;
+    }
   }
 }
 
@@ -213,7 +224,7 @@ function frame(now: number): void {
 onResize();
 await setMode(settings.mode);
 requestAnimationFrame(frame);
-// Mouse works immediately; the face tracker needs a user gesture-free permission prompt,
-// which browsers allow on page load, but we still let the HUD call-to-action trigger it
-// if the user previously chose mouse.
-void applySource();
+// Mouse works immediately. On first run, wait for the intro's "Enable camera" button
+// so the permission prompt doesn't appear behind the overlay.
+if (hasSeenIntro() || settings.source === 'mouse') void applySource();
+else void mouse.start();

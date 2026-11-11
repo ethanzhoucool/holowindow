@@ -1,0 +1,16 @@
+name: Feature request
+description: Suggest an idea, a scene, or an improvement.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like?
+      description: Describe the idea and why it would make HoloWindow better.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or references
+      description: Links, demos, or other approaches you have seen.
