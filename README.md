@@ -52,7 +52,7 @@ A normal 3D renderer assumes your eye sits at a fixed point, dead centre in fron
 ## Features
 
 - **Five scenes**, picked from the dock:
-  - **Room**: a neon grid-walled box with floating objects that sits *behind* your screen.
+  - **Room**: a grid-walled box with floating objects that sits *behind* your screen.
   - **Space**: a star field, nebula and ringed planet, with objects drifting out past the glass.
   - **Aquarium**: a fish tank behind your screen.
   - **Photo**: turn any photo into a 3D relief with in-browser monocular depth estimation.
@@ -68,7 +68,7 @@ A normal 3D renderer assumes your eye sits at a fixed point, dead centre in fron
 | Key       | Action                         |
 | --------- | ------------------------------ |
 | `Space`   | Next scene                     |
-| `1`–`5`   | Jump to a scene (Room … 3D model) |
+| `1`-`5`   | Jump to a scene (Room … 3D model) |
 | `H`       | Hide / show the controls       |
 | `F`       | Fullscreen                     |
 | `R`       | Recenter head position         |
@@ -99,10 +99,10 @@ The illusion is only as good as the geometry. In order of impact:
 
 1. **Set your screen size.** Open Settings → *Calibrate with a card…* and match the outline to any credit or ID card. Or pick a preset, or measure the lit area of the display with a ruler (width × height in cm).
 2. **Go fullscreen** (`F`). Then the viewport is exactly the screen and nothing is offset by browser chrome.
-3. **Sit 50–70 cm away**, roughly centred, and press `R` to recenter.
+3. **Sit 50-70 cm away**, roughly centred, and press `R` to recenter.
 4. **Light your face.** A lamp in front of you beats a window behind you. Tracking gets jittery in the dark. Raise *Smoothing* if it shakes.
 5. **Close one eye.** Your brain loses its stereo cue that the screen is flat, and the depth becomes startlingly real.
-6. Still feels off? Step 2 of the calibration wizard shows the distance the tracker reads; adjust *Webcam field of view* (most laptop cameras are 55–75°) until it matches reality. *Motion gain* above 1× exaggerates the effect for demos.
+6. Still feels off? Step 2 of the calibration wizard shows the distance the tracker reads; adjust *Webcam field of view* (most laptop cameras are 55-75°) until it matches reality. *Motion gain* above 1× exaggerates the effect for demos.
 
 ## Privacy
 

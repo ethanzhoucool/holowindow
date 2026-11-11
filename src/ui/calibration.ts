@@ -86,7 +86,7 @@ export function createCalibrationWizard(deps: CalibrationDeps): CalibrationWizar
   const describe = (s: ScreenSpec): string => `${s.widthCm.toFixed(1)} × ${s.heightCm.toFixed(1)} cm`;
 
   // ------------------------------------------------------------ step 1: card
-  const cardLabel = h('span', { class: 'hw-card-label' }, 'ID-1 · 85.60 × 53.98 mm');
+  const cardLabel = h('span', { class: 'hw-card-label' }, '85.60 × 53.98 mm');
   const card = h('div', { class: 'hw-card', 'aria-hidden': 'true' }, h('span', { class: 'hw-card-chip' }), cardLabel);
   const handle = h('span', { class: 'hw-card-handle', 'aria-hidden': 'true' });
   card.appendChild(handle);
@@ -99,7 +99,7 @@ export function createCalibrationWizard(deps: CalibrationDeps): CalibrationWizar
       'button',
       {
         type: 'button',
-        class: 'hw-btn hw-btn-small',
+        class: 'hw-btn hw-btn-small hw-btn-icon',
         'aria-label': dir < 0 ? 'Shrink outline slightly' : 'Grow outline slightly',
         onclick: () => setCardPx(cardPx + dir * 0.5),
       },
@@ -120,7 +120,7 @@ export function createCalibrationWizard(deps: CalibrationDeps): CalibrationWizar
   const toDiagonalBtn = h(
     'button',
     { type: 'button', class: 'hw-link hw-link-small', onclick: () => setMethod('diagonal') },
-    'No card? Enter your diagonal',
+    'No card? Enter the diagonal instead',
   );
   const cardPane = h(
     'div',
@@ -128,7 +128,7 @@ export function createCalibrationWizard(deps: CalibrationDeps): CalibrationWizar
     h(
       'p',
       { class: 'hw-calib-lede' },
-      'Hold a credit card or ID card flat against the screen, tucked into the top-left corner of the outline. Drag the glowing corner (or use the slider) until the outline matches the card’s edges exactly.',
+      'Hold a bank card or ID card flat against the screen, with its corner in the top-left of the outline. Drag the round handle, or use the slider, until the outline matches the card’s edges.',
     ),
     stage,
     h(
@@ -169,7 +169,7 @@ export function createCalibrationWizard(deps: CalibrationDeps): CalibrationWizar
     h(
       'p',
       { class: 'hw-calib-lede' },
-      'Enter your display’s diagonal (it’s on the box, the spec sheet, or try “About this Mac” / display settings).',
+      'Enter your display’s diagonal in inches. It’s on the spec sheet, or under About This Mac on a Mac.',
     ),
     h(
       'div',
@@ -202,7 +202,7 @@ export function createCalibrationWizard(deps: CalibrationDeps): CalibrationWizar
     'button',
     {
       type: 'button',
-      class: 'hw-btn hw-btn-outline',
+      class: 'hw-btn hw-btn-secondary',
       hidden: true,
       onclick: () => {
         cameraRequested = true;
@@ -233,7 +233,7 @@ export function createCalibrationWizard(deps: CalibrationDeps): CalibrationWizar
     { class: 'hw-field hw-calib-fov', hidden: true },
     h('div', { class: 'hw-field-head' }, h('label', { for: fovId }, 'Webcam field of view'), fovOut),
     fovSlider,
-    h('p', { class: 'hw-hint' }, 'Wider FOV reads you as closer; narrower reads you as farther. Most laptop cameras are 55–75°.'),
+    h('p', { class: 'hw-hint' }, 'A wider field of view reads you as closer, a narrower one as farther. Most laptop cameras are 55-75°.'),
   );
   const showFovBtn = h(
     'button',
@@ -247,12 +247,12 @@ export function createCalibrationWizard(deps: CalibrationDeps): CalibrationWizar
     h(
       'p',
       { class: 'hw-calib-lede' },
-      'Optional. Sit where you normally sit. If the reading below doesn’t match how far your eyes really are from the screen, tune the webcam’s field of view.',
+      'Optional. Sit as you normally do. If the reading doesn’t match your real distance from the screen, adjust the webcam field of view.',
     ),
     h(
       'div',
       { class: 'hw-dist' },
-      h('span', { class: 'hw-calib-result-label' }, 'We’re reading your distance as'),
+      h('span', { class: 'hw-calib-result-label' }, 'Measured distance'),
       h('div', { class: 'hw-dist-read' }, distNum, h('span', { class: 'hw-dist-unit' }, 'cm')),
       gauge,
       distMsg,
@@ -264,25 +264,24 @@ export function createCalibrationWizard(deps: CalibrationDeps): CalibrationWizar
 
   // ------------------------------------------------------------ shell
   const titleId = nextId('hw-calib-title');
-  const stepLabel = h('p', { class: 'hw-eyebrow hw-calib-eyebrow' });
+  const stepLabel = h('p', { class: 'hw-calib-step-label' });
   const title = h('h2', { id: titleId, class: 'hw-calib-title' });
-  const dots = [h('span', { class: 'hw-calib-dot' }), h('span', { class: 'hw-calib-dot' })];
 
-  const cancelBtn = h('button', { type: 'button', class: 'hw-link', onclick: () => cancel() }, 'Cancel');
-  const backBtn = h('button', { type: 'button', class: 'hw-btn hw-btn-outline', onclick: () => goStep(1) }, icon('arrowLeft'), 'Back');
-  const saveBtn = h('button', { type: 'button', class: 'hw-btn hw-btn-outline', onclick: () => save() }, 'Save');
-  const nextBtn = h('button', { type: 'button', class: 'hw-btn hw-btn-primary', onclick: () => goStep(2) }, 'Next: distance', icon('arrowRight'));
+  const cancelBtn = h('button', { type: 'button', class: 'hw-btn hw-btn-ghost', onclick: () => cancel() }, 'Cancel');
+  const backBtn = h('button', { type: 'button', class: 'hw-btn hw-btn-secondary', onclick: () => goStep(1) }, icon('arrowLeft'), 'Back');
+  const saveBtn = h('button', { type: 'button', class: 'hw-btn hw-btn-secondary', onclick: () => save() }, 'Save');
+  const nextBtn = h('button', { type: 'button', class: 'hw-btn hw-btn-primary', onclick: () => goStep(2) }, 'Next', icon('arrowRight'));
   const finishBtn = h('button', { type: 'button', class: 'hw-btn hw-btn-primary', onclick: () => save() }, 'Save');
   const closeBtn = h(
     'button',
-    { type: 'button', class: 'hw-btn hw-calib-close', 'aria-label': 'Close calibration', onclick: () => cancel() },
+    { type: 'button', class: 'hw-btn hw-btn-icon hw-calib-close', 'aria-label': 'Close calibration', onclick: () => cancel() },
     icon('close'),
   );
 
   const dialog = h(
     'div',
     { class: 'hw-calib hw-glass', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId },
-    h('header', { class: 'hw-calib-head' }, h('div', {}, stepLabel, title), h('div', { class: 'hw-calib-dots', 'aria-hidden': 'true' }, ...dots), closeBtn),
+    h('header', { class: 'hw-calib-head' }, h('div', {}, stepLabel, title), closeBtn),
     h('div', { class: 'hw-calib-body' }, step1, step2),
     h('footer', { class: 'hw-calib-foot' }, cancelBtn, backBtn, h('span', { class: 'hw-calib-spacer' }), saveBtn, nextBtn, finishBtn),
   );
@@ -377,9 +376,8 @@ export function createCalibrationWizard(deps: CalibrationDeps): CalibrationWizar
     saveBtn.hidden = n !== 1;
     finishBtn.hidden = n !== 2;
     cancelBtn.hidden = n !== 1;
-    stepLabel.textContent = `Calibrate · step ${n} of 2`;
+    stepLabel.textContent = `Calibration, ${n} of 2`;
     title.textContent = n === 1 ? 'Match your screen to a card' : 'Check your viewing distance';
-    dots.forEach((d, i) => d.classList.toggle('is-on', i === n - 1));
     if (n === 1) {
       if (method === 'card') {
         layoutCard();
@@ -421,7 +419,7 @@ export function createCalibrationWizard(deps: CalibrationDeps): CalibrationWizar
       const starting = cameraRequested && s.source === 'face';
       enableCamBtn.hidden = starting;
       setDistanceMsg(
-        starting ? 'Starting camera…' : 'Measuring distance needs the webcam. Turn it on, or just save to skip this step.',
+        starting ? 'Starting camera…' : 'Measuring distance needs the webcam. Turn it on, or save now to skip this step.',
         'info',
       );
       return;
@@ -429,7 +427,7 @@ export function createCalibrationWizard(deps: CalibrationDeps): CalibrationWizar
     if (!pose || !pose.tracked) {
       distNum.textContent = '--';
       distMarker.hidden = true;
-      setDistanceMsg('Looking for your face… face the screen in good light.', 'info');
+      setDistanceMsg('Looking for your face. Face the screen in good light.', 'info');
       return;
     }
     // hud.update() receives the motion-gained pose; undo the gain to show the physical reading.
@@ -441,13 +439,13 @@ export function createCalibrationWizard(deps: CalibrationDeps): CalibrationWizar
     const inRange = z >= TYPICAL_NEAR_CM && z <= TYPICAL_FAR_CM;
     distMarker.classList.toggle('is-off', !inRange);
     if (inRange) {
-      setDistanceMsg('That’s in the typical 40–80 cm range. If it matches reality, you’re all set.', 'ok');
+      setDistanceMsg('Within the typical 40-80 cm range. If that matches your real distance, you’re done.', 'ok');
     } else {
       const far = z > TYPICAL_FAR_CM;
       setDistanceMsg(
         far
-          ? 'That’s farther than most people sit. If you’re really closer, raise the field of view until the number matches.'
-          : 'That’s closer than most people sit. If you’re really farther away, lower the field of view until the number matches.',
+          ? 'Farther than most people sit. If you’re actually closer, raise the field of view until the number matches.'
+          : 'Closer than most people sit. If you’re actually farther away, lower the field of view until the number matches.',
         'warn',
       );
       if (!fovRevealed) revealFov(false);

@@ -211,7 +211,7 @@ const hud = createHud(document.body, settings, {
     try {
       const photo = (await switchToMode('photo')) as PhotoScene;
       await photo.loadImage(file, (msg) => hud.setStatus(msg));
-      hud.setStatus('Depth ready — look around!', 'ok');
+      hud.setStatus('Depth ready. Look around.', 'ok');
     } catch (err) {
       console.error(err);
       hud.setStatus(`Could not process image: ${(err as Error).message}`, 'error');
@@ -221,7 +221,7 @@ const hud = createHud(document.body, settings, {
     try {
       const model = (await switchToMode('model')) as ModelScene;
       await model.loadModel(file, (msg) => hud.setStatus(msg));
-      hud.setStatus('Model loaded — look around it!', 'ok');
+      hud.setStatus('Model loaded. Walk around it.', 'ok');
     } catch (err) {
       console.error(err);
       hud.setStatus(`Could not load model: ${(err as Error).message}`, 'error');

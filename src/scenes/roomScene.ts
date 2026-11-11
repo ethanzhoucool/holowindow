@@ -2,9 +2,8 @@ import * as THREE from 'three';
 import type { HeadPose, HoloScene, SceneContext } from '../types';
 import {
   PALETTE,
-  createNeonEnvironment,
   createRoomUniforms,
-  createSunMaterial,
+  createStudioEnvironment,
   createTargetTexture,
   patchRoomMaterial,
 } from './room/roomMaterials';
@@ -61,7 +60,7 @@ export function createRoomScene(): HoloScene {
   // ---------- walls ----------
   const wallMat = mat(
     patchRoomMaterial(
-      new THREE.MeshStandardMaterial({ color: PALETTE.wall, roughness: 0.92, metalness: 0 }),
+      new THREE.MeshStandardMaterial({ color: PALETTE.wall, roughness: 0.95, metalness: 0 }),
       uniforms,
       { grid: true },
     ),
@@ -84,52 +83,32 @@ export function createRoomScene(): HoloScene {
   right.rotation.y = -Math.PI / 2;
   const back = makeWall('back');
 
-  const sunMat = mat(createSunMaterial());
-  const sun = new THREE.Mesh(plane, sunMat);
-  sun.renderOrder = 1;
-  root.add(sun);
-
   // ---------- shared prop resources ----------
   const targetTex = createTargetTexture();
   textures.push(targetTex);
-  const faceMat = mat(
-    patchRoomMaterial(new THREE.MeshStandardMaterial({ map: targetTex, color: 0xb8b8b8, roughness: 0.55 }), uniforms),
-  );
-  const edgeMat = mat(
-    patchRoomMaterial(new THREE.MeshStandardMaterial({ color: PALETTE.ink, roughness: 0.4, metalness: 0.6 }), uniforms),
-  );
-  const stalkMat = mat(
-    patchRoomMaterial(new THREE.MeshStandardMaterial({ color: 0xc9d3e6, roughness: 0.3, metalness: 0.85 }), uniforms),
-  );
-  const targetGeo = geo(new THREE.CylinderGeometry(1, 1, 0.12, 40, 1));
-  targetGeo.rotateX(Math.PI / 2); // caps face ±z
-  const stalkGeo = geo(new THREE.CylinderGeometry(1, 1, 1, 8, 1, true));
-  stalkGeo.translate(0, 0.5, 0);
-  const footGeo = geo(new THREE.CylinderGeometry(1, 1.25, 0.25, 20));
-  footGeo.translate(0, 0.125, 0);
-  const sphereGeo = geo(new THREE.SphereGeometry(1, 40, 20));
 
-  const glossy = (color: number, extra: THREE.MeshPhysicalMaterialParameters = {}) =>
-    mat(
-      patchRoomMaterial(
-        new THREE.MeshPhysicalMaterial({
-          color,
-          roughness: 0.18,
-          metalness: 0.1,
-          clearcoat: 1,
-          clearcoatRoughness: 0.05,
-          envMapIntensity: 1.2,
-          ...extra,
-        }),
-        uniforms,
-      ),
-    );
   const physMats: THREE.MeshPhysicalMaterial[] = [];
-  const glossyTracked = (color: number, extra?: THREE.MeshPhysicalMaterialParameters) => {
-    const m = glossy(color, extra);
+  /** Env-mapped physical material (satin ceramic, brushed metal, frosted stone). */
+  const surface = (params: THREE.MeshPhysicalMaterialParameters) => {
+    const m = mat(patchRoomMaterial(new THREE.MeshPhysicalMaterial({ envMapIntensity: 0.6, ...params }), uniforms));
     physMats.push(m);
     return m;
   };
+  const ceramic = (color: number, extra: THREE.MeshPhysicalMaterialParameters = {}) =>
+    surface({ color, roughness: 0.55, metalness: 0, clearcoat: 0.35, clearcoatRoughness: 0.4, ...extra });
+  const brushed = (color: number, extra: THREE.MeshPhysicalMaterialParameters = {}) =>
+    surface({ color, roughness: 0.38, metalness: 1, envMapIntensity: 0.9, ...extra });
+
+  const faceMat = ceramic(0xffffff, { map: targetTex });
+  const edgeMat = brushed(PALETTE.graphite, { roughness: 0.45 });
+  const stalkMat = brushed(PALETTE.steel);
+  const targetGeo = geo(new THREE.CylinderGeometry(1, 1, 0.12, 48, 1));
+  targetGeo.rotateX(Math.PI / 2); // caps face ±z
+  const stalkGeo = geo(new THREE.CylinderGeometry(1, 1, 1, 10, 1, true));
+  stalkGeo.translate(0, 0.5, 0);
+  const footGeo = geo(new THREE.CylinderGeometry(1, 1.15, 0.3, 24));
+  footGeo.translate(0, 0.15, 0);
+  const sphereGeo = geo(new THREE.SphereGeometry(1, 40, 20));
 
   const placed: Placed[] = [];
   const stalked: Stalked[] = [];
@@ -157,37 +136,26 @@ export function createRoomScene(): HoloScene {
   addTarget(0.24, 0.2, -29, 0.085);
   addTarget(0.06, -0.12, -45, 0.085);
 
-  // Glossy spheres inside the box.
-  const bigBall = shadowy(new THREE.Mesh(sphereGeo, glossyTracked(PALETTE.ink, { metalness: 0.6, roughness: 0.12 })));
+  // Spheres inside the box: a heavy graphite one on the floor, a terracotta one floating.
+  const bigBall = shadowy(new THREE.Mesh(sphereGeo, ceramic(PALETTE.graphite, { roughness: 0.42, clearcoat: 0.5 })));
   root.add(bigBall);
   placed.push({ obj: bigBall, fx: 0.31, fy: 0, z: -40, size: 0.13, floor: true });
 
-  const floatBall = shadowy(new THREE.Mesh(sphereGeo, glossyTracked(PALETTE.magenta, { roughness: 0.22 })));
+  const floatBall = shadowy(new THREE.Mesh(sphereGeo, ceramic(PALETTE.accent)));
   root.add(floatBall);
   placed.push({ obj: floatBall, fx: -0.24, fy: 0.24, z: -33, size: 0.06, bobAmp: 0.9, bobSpeed: 0.7, phase: 1.3 });
 
-  // Neon ring mid-depth.
-  const ringGeo = geo(new THREE.TorusGeometry(1, 0.09, 10, 56));
-  const ringMat = mat(
-    patchRoomMaterial(
-      new THREE.MeshStandardMaterial({
-        color: 0x0c1a2a,
-        emissive: PALETTE.grid,
-        emissiveIntensity: 2.4,
-        roughness: 0.4,
-      }),
-      uniforms,
-    ),
-  );
-  const ring = shadowy(new THREE.Mesh(ringGeo, ringMat));
+  // Porcelain torus mid-depth.
+  const ringGeo = geo(new THREE.TorusGeometry(1, 0.24, 20, 64));
+  const ring = shadowy(new THREE.Mesh(ringGeo, ceramic(PALETTE.porcelain)));
   root.add(ring);
   placed.push({
     obj: ring, fx: -0.06, fy: 0.02, z: -22, size: 0.1,
-    bobAmp: 0.5, bobSpeed: 0.5, phase: 0.2, spin: new THREE.Vector3(0.0, 0.35, 0.0),
+    bobAmp: 0.5, bobSpeed: 0.5, phase: 0.2, spin: new THREE.Vector3(0.0, 0.3, 0.0),
   });
 
   // ---------- pop-out objects (z > 0), kept small and near the middle ----------
-  const crystal = new THREE.Group();
+  // Faceted frosted stone (matte, flat-shaded so each facet catches the key differently).
   const crystalGeo = geo(
     new THREE.LatheGeometry(
       [new THREE.Vector2(0, -1.5), new THREE.Vector2(0.62, -0.25), new THREE.Vector2(0.62, 0.25), new THREE.Vector2(0, 1.5)],
@@ -195,68 +163,48 @@ export function createRoomScene(): HoloScene {
     ),
   );
   crystalGeo.computeVertexNormals();
-  const crystalMat = glossyTracked(0x1fa6d6, {
-    flatShading: true,
-    roughness: 0.08,
-    metalness: 0.2,
-    emissive: new THREE.Color(PALETTE.grid),
-    emissiveIntensity: 0.3,
-    envMapIntensity: 1.8,
-  });
-  crystal.add(shadowy(new THREE.Mesh(crystalGeo, crystalMat)));
-  const crystalEdges = geo(new THREE.EdgesGeometry(crystalGeo, 1));
-  const edgeLineMat = mat(
-    new THREE.LineBasicMaterial({ color: new THREE.Color(PALETTE.grid).multiplyScalar(1.6), transparent: true, opacity: 0.85 }),
+  const crystal = shadowy(
+    new THREE.Mesh(crystalGeo, surface({ color: 0xd4d6d6, flatShading: true, roughness: 0.68, metalness: 0, sheen: 0.4, sheenRoughness: 0.8, sheenColor: new THREE.Color(0xffffff) })),
   );
-  crystal.add(new THREE.LineSegments(crystalEdges, edgeLineMat));
   crystal.rotation.z = 0.12;
   root.add(crystal);
   placed.push({
     obj: crystal, fx: 0.11, fy: 0.07, z: 8, size: 0.075,
-    bobAmp: 0.35, bobSpeed: 0.9, phase: 0, spin: new THREE.Vector3(0, 0.6, 0),
+    bobAmp: 0.3, bobSpeed: 0.8, phase: 0, spin: new THREE.Vector3(0, 0.4, 0),
   });
 
-  const popBall = shadowy(new THREE.Mesh(sphereGeo, glossyTracked(PALETTE.accent, { roughness: 0.2 })));
+  const popBall = shadowy(new THREE.Mesh(sphereGeo, ceramic(PALETTE.accent)));
   root.add(popBall);
-  placed.push({ obj: popBall, fx: -0.13, fy: -0.13, z: 5, size: 0.05, bobAmp: 0.3, bobSpeed: 1.1, phase: 2.1 });
+  placed.push({ obj: popBall, fx: -0.13, fy: -0.13, z: 5, size: 0.05, bobAmp: 0.3, bobSpeed: 1.0, phase: 2.1 });
 
-  const haloGeo = geo(new THREE.TorusGeometry(1, 0.14, 8, 40));
-  const haloMat = mat(
-    patchRoomMaterial(
-      new THREE.MeshStandardMaterial({
-        color: 0x2a1408,
-        emissive: new THREE.Color(PALETTE.accentHot),
-        emissiveIntensity: 1.8,
-        roughness: 0.35,
-      }),
-      uniforms,
-    ),
-  );
-  const halo = shadowy(new THREE.Mesh(haloGeo, haloMat));
+  // Small brushed-steel ring.
+  const haloGeo = geo(new THREE.TorusGeometry(1, 0.2, 14, 48));
+  const halo = shadowy(new THREE.Mesh(haloGeo, brushed(PALETTE.steel)));
   root.add(halo);
   placed.push({
     obj: halo, fx: -0.03, fy: 0.16, z: 11, size: 0.035,
-    bobAmp: 0.2, bobSpeed: 0.8, phase: 4, spin: new THREE.Vector3(0.45, 0.7, 0),
+    bobAmp: 0.2, bobSpeed: 0.7, phase: 4, spin: new THREE.Vector3(0.35, 0.5, 0),
   });
 
   // ---------- lights ----------
-  const hemi = new THREE.HemisphereLight(0x3a4f8f, 0x080a14, 0.55);
+  // Soft sky/ground fill: cool-white from above, a darker grey bounce from below.
+  const hemi = new THREE.HemisphereLight(0xf2f4f5, 0x989c9f, 1.55);
   root.add(hemi);
 
-  const key = new THREE.SpotLight(0xfff1e0, 380, 0, 0.6, 0.65, 1);
+  // Key: one large softbox up-front-left, the single shadow caster.
+  const key = new THREE.SpotLight(0xfff4e8, 215, 0, 0.6, 0.9, 1);
   key.castShadow = true;
   key.shadow.mapSize.set(1024, 1024);
   key.shadow.bias = -0.0004;
   key.shadow.normalBias = 0.03;
-  key.shadow.radius = 5;
+  key.shadow.radius = 2.5;
   key.shadow.camera.near = 8;
   key.shadow.camera.far = 160;
   root.add(key, key.target);
 
-  const rim = new THREE.PointLight(PALETTE.grid, 260, 0, 2);
-  root.add(rim);
-  const warm = new THREE.PointLight(PALETTE.accent, 320, 0, 2);
-  root.add(warm);
+  // Faint floor bounce lifting the ceiling and the undersides of objects.
+  const bounce = new THREE.PointLight(0xe9e7e3, 40, 0, 1);
+  root.add(bounce);
 
   // ---------- layout ----------
   let w = 30;
@@ -281,16 +229,13 @@ export function createRoomScene(): HoloScene {
     back.position.set(0, 0, -DEPTH);
     back.scale.set(w + e, h + e, 1);
 
-    const sunR = Math.min(h * 0.3, w * 0.22);
-    sun.position.set(0, h * 0.04, -DEPTH + 0.05);
-    sun.scale.set(sunR * 4, sunR * 4, 1);
-
     // Snap cells so grid lines land exactly on every box edge.
     const nx = Math.max(2, Math.round(w / CELL));
     const ny = Math.max(2, Math.round(h / CELL));
     const nz = Math.max(2, Math.round(DEPTH / CELL));
     uniforms.uCell.value.set(w / nx, h / ny, DEPTH / nz);
     uniforms.uOrigin.value.set(-hw, -hh, 0);
+    uniforms.uHalf.value.set(hw, hh);
 
     for (const s of stalked) {
       const r = s.size * m;
@@ -326,8 +271,7 @@ export function createRoomScene(): HoloScene {
     }
     key.angle = Math.min(maxAng * 1.08, Math.PI / 2 - 0.05);
 
-    rim.position.set(hw * 0.75, hh * 0.7, -DEPTH + 6);
-    warm.position.set(0, -hh * 0.35, -DEPTH + 7);
+    bounce.position.set(0, -hh * 0.25, -DEPTH * 0.3);
   }
 
   let time = 0;
@@ -337,7 +281,7 @@ export function createRoomScene(): HoloScene {
     root,
 
     init(ctx: SceneContext) {
-      envRT = createNeonEnvironment(ctx.renderer);
+      envRT = createStudioEnvironment(ctx.renderer);
       for (const m of physMats) {
         m.envMap = envRT.texture;
         m.needsUpdate = true;
@@ -366,7 +310,6 @@ export function createRoomScene(): HoloScene {
       for (let i = 0; i < stalked.length; i++) {
         stalked[i].target.rotation.y = Math.sin(time * 0.4 + i * 2.1) * 0.12;
       }
-      sunMat.uniforms.uTime.value = time;
     },
 
     dispose() {
@@ -378,8 +321,7 @@ export function createRoomScene(): HoloScene {
       envRT?.dispose();
       envRT = null;
       key.dispose();
-      rim.dispose();
-      warm.dispose();
+      bounce.dispose();
       hemi.dispose();
     },
   };

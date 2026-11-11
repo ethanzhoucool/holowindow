@@ -179,7 +179,7 @@ export function createSpaceScene(): HoloScene {
     root.add(m);
     return m;
   });
-  const lipMat = mat(new THREE.MeshBasicMaterial({ color: new THREE.Color(0x6fa8ff).multiplyScalar(0.22) }));
+  const lipMat = mat(new THREE.MeshBasicMaterial({ color: new THREE.Color(0x9a9a9e).multiplyScalar(0.12) }));
   const lipBars = [0, 1, 2, 3].map(() => {
     const m = new THREE.Mesh(frameGeo, lipMat);
     root.add(m);
@@ -244,7 +244,7 @@ export function createSpaceScene(): HoloScene {
     frameBars[2].scale.set(t, h, FRAME_DEPTH);
     frameBars[3].position.set(hw - t / 2, 0, zc);
     frameBars[3].scale.set(t, h, FRAME_DEPTH);
-    // A hairline of cool light at the inner back edge of the frame.
+    // A faint neutral hairline at the inner back edge of the frame.
     const lt = 0.03;
     const lz = -FRAME_DEPTH + 0.02;
     lipBars[0].position.set(0, hh - t - lt / 2, lz);

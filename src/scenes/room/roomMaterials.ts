@@ -1,14 +1,16 @@
 import * as THREE from 'three';
 
-/** Palette shared by everything in the room. */
+/**
+ * Palette shared by everything in the room: one cool-grey family plus a single
+ * desaturated terracotta accent.
+ */
 export const PALETTE = {
-  wall: 0x1e2852,
-  grid: new THREE.Color(0x2ee6ff),
-  accent: 0xff6a3d,
-  accentHot: 0xffb347,
-  magenta: 0xff3d8b,
-  ivory: 0xf2efe8,
-  ink: 0x0a0f24,
+  wall: 0xb9bcbe,
+  porcelain: 0xe2e3e1,
+  stone: 0x9a9d9f,
+  steel: 0xa7abae,
+  graphite: 0x3d4144,
+  accent: 0xb1664f,
 };
 
 /**
@@ -20,18 +22,32 @@ export interface RoomUniforms {
   uFadeFar: THREE.IUniform<number>;
   uCell: THREE.IUniform<THREE.Vector3>;
   uOrigin: THREE.IUniform<THREE.Vector3>;
-  uGridColor: THREE.IUniform<THREE.Color>;
-  uGridIntensity: THREE.IUniform<number>;
+  /** Half-extents of the box opening (x, y) in cm. */
+  uHalf: THREE.IUniform<THREE.Vector2>;
+  /** 0..1 — how much a grout line darkens the wall albedo. */
+  uGridStrength: THREE.IUniform<number>;
+  /** Grout line width in cm. */
+  uGridWidth: THREE.IUniform<number>;
+  /** 0..1 — darkening right in an inside corner. */
+  uAOStrength: THREE.IUniform<number>;
+  /** Falloff distance of the corner darkening, in cm. */
+  uAORadius: THREE.IUniform<number>;
+  /** Albedo multiplier for the floor (slightly darker than walls, like a real room). */
+  uFloorTint: THREE.IUniform<number>;
 }
 
 export function createRoomUniforms(depthCm: number): RoomUniforms {
   return {
     uDepth: { value: depthCm },
-    uFadeFar: { value: 0.22 },
+    uFadeFar: { value: 0.8 },
     uCell: { value: new THREE.Vector3(5, 5, 5) },
     uOrigin: { value: new THREE.Vector3() },
-    uGridColor: { value: PALETTE.grid.clone() },
-    uGridIntensity: { value: 1.35 },
+    uHalf: { value: new THREE.Vector2(15, 9) },
+    uGridStrength: { value: 0.16 },
+    uGridWidth: { value: 0.06 },
+    uAOStrength: { value: 0.5 },
+    uAORadius: { value: 4 },
+    uFloorTint: { value: 0.86 },
   };
 }
 
@@ -47,29 +63,45 @@ uniform float uDepth;
 uniform float uFadeFar;
 uniform vec3 uCell;
 uniform vec3 uOrigin;
-uniform vec3 uGridColor;
-uniform float uGridIntensity;
+uniform vec2 uHalf;
+uniform float uGridStrength;
+uniform float uGridWidth;
+uniform float uAOStrength;
+uniform float uAORadius;
+uniform float uFloorTint;
 `;
 
-/** Anti-aliased, pixel-crisp grid lines in world space, with a faint world-space halo. */
-const GRID_FRAG = /* glsl */ `
+/**
+ * Wall surface: thin, anti-aliased grout lines that darken the albedo (not emissive),
+ * plus a soft ambient-occlusion-like darkening into the inside corners of the box.
+ */
+const WALL_FRAG = /* glsl */ `
 {
+  vec3 n = abs(normalize(vRoomN));
+  // Only the two axes lying in this surface's plane draw lines / receive corner AO.
+  vec3 mask = step(n, vec3(0.5));
+
   vec3 gp = (vRoomPos - uOrigin) / uCell;
   vec3 fw = max(fwidth(gp), vec3(1e-4));
   vec3 d = abs(fract(gp + 0.5) - 0.5);
-  vec3 core = 1.0 - smoothstep(0.35, 1.35, d / fw);
-  vec3 halo = exp(-(d * uCell) / 0.22) * 0.22;
-  // Only the two axes lying in this surface's plane draw lines.
-  vec3 n = abs(normalize(vRoomN));
-  vec3 mask = step(n, vec3(0.5));
-  // Fade lines out where they would alias (very grazing / far away).
-  vec3 aa = 1.0 - smoothstep(0.25, 0.6, fw);
-  vec3 l = (core + halo) * mask * aa;
-  // The ring of lines at z = 0 is the window frame: make it glow brighter.
-  float frame = 1.0 - smoothstep(0.0, 0.6, -vRoomPos.z);
-  l.z *= 1.0 + 1.6 * frame;
+  // Line half-width in cell units, never thinner than ~1px so it doesn't shimmer.
+  vec3 hwid = max(vec3(uGridWidth * 0.5) / uCell, fw * 0.5);
+  vec3 cov = 1.0 - smoothstep(hwid - fw * 0.5, hwid + fw * 0.5, d);
+  // A line thinner than a pixel keeps its average darkness instead of popping.
+  cov *= min(vec3(1.0), (uGridWidth / uCell) / max(fw, vec3(1e-4)));
+  // Fade where lines would alias (very grazing / far away).
+  cov *= 1.0 - smoothstep(0.3, 0.7, fw);
+  vec3 l = cov * mask;
   float line = max(max(l.x, l.y), l.z);
-  totalEmissiveRadiance += uGridColor * uGridIntensity * line;
+  diffuseColor.rgb *= 1.0 - uGridStrength * line;
+
+  // Distance to the neighbouring planes of the box (the front is open, so no z=0 term).
+  vec3 dist = vec3(uHalf.x - abs(vRoomPos.x), uHalf.y - abs(vRoomPos.y), uDepth + vRoomPos.z);
+  vec3 occ = exp(-max(dist, vec3(0.0)) / uAORadius) * mask;
+  float ao = (1.0 - uAOStrength * occ.x) * (1.0 - uAOStrength * occ.y) * (1.0 - uAOStrength * occ.z);
+  diffuseColor.rgb *= ao;
+
+  if (vRoomN.y > 0.5) diffuseColor.rgb *= uFloorTint;
 }
 `;
 
@@ -78,8 +110,8 @@ gl_FragColor.rgb *= mix(1.0, uFadeFar, smoothstep(0.0, uDepth, -vRoomPos.z));
 #include <tonemapping_fragment>`;
 
 /**
- * Patch a built-in lit material so it (a) darkens toward the back of the box like
- * fog would, and optionally (b) draws the glowing room grid as emissive light.
+ * Patch a built-in lit material so it (a) dims slightly toward the back of the box
+ * (gentle aerial perspective), and optionally (b) draws the wall grout grid + corner AO.
  */
 export function patchRoomMaterial<T extends THREE.Material>(
   material: T,
@@ -101,82 +133,41 @@ vRoomN = mat3(modelMatrix) * objectNormal;`,
       .replace('#include <common>', `#include <common>\n${FRAG_DECL}`)
       .replace('#include <tonemapping_fragment>', FADE_FRAG);
     if (grid) {
-      frag = frag.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${GRID_FRAG}`);
+      frag = frag.replace('#include <color_fragment>', `#include <color_fragment>\n${WALL_FRAG}`);
     }
     shader.fragmentShader = frag;
   };
-  material.customProgramCacheKey = () => (grid ? 'holo-room-grid' : 'holo-room-fade');
+  material.customProgramCacheKey = () => (grid ? 'holo-room-wall' : 'holo-room-fade');
   return material;
 }
 
-/** Synthwave sun painted on the back wall: warm gradient disc with scrolling horizon cuts. */
-export function createSunMaterial(): THREE.ShaderMaterial {
-  return new THREE.ShaderMaterial({
-    uniforms: {
-      uTime: { value: 0 },
-      uTop: { value: new THREE.Color(PALETTE.accentHot) },
-      uBottom: { value: new THREE.Color(PALETTE.magenta) },
-    },
-    vertexShader: /* glsl */ `
-      varying vec2 vUv;
-      void main() {
-        vUv = uv;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }`,
-    fragmentShader: /* glsl */ `
-      uniform float uTime;
-      uniform vec3 uTop;
-      uniform vec3 uBottom;
-      varying vec2 vUv;
-      void main() {
-        // The quad is 2x the disc so the glow has room.
-        vec2 p = (vUv - 0.5) * 2.0;
-        float r = length(p);
-        float fw = fwidth(r);
-        float R = 0.5;
-        float disc = 1.0 - smoothstep(R - fw, R + fw, r);
-        float t = clamp(p.y / R * 0.5 + 0.5, 0.0, 1.0);
-        vec3 col = mix(uBottom, uTop, smoothstep(0.0, 1.0, t));
-        // Horizontal cuts in the lower half, widening toward the bottom.
-        float y = p.y / R;
-        float cut = 0.0;
-        if (y < 0.15) {
-          float period = 0.16;
-          float ph = fract((y - uTime * 0.03) / period);
-          float gap = clamp((0.15 - y) * 0.45, 0.0, 0.85);
-          float fy = fwidth(y / period);
-          cut = smoothstep(gap + fy, gap - fy, ph);
-        }
-        float body = disc * (1.0 - cut);
-        float glow = exp(-max(r - R, 0.0) * 9.0) * 0.28 * (1.0 - disc);
-        vec3 c = col * (body * 1.6 + glow);
-        // Premultiplied: the disc occludes the wall grid, the glow and cuts let it through.
-        gl_FragColor = vec4(c, body);
-        #include <tonemapping_fragment>
-        #include <colorspace_fragment>
-      }`,
-    transparent: true,
-    blending: THREE.CustomBlending,
-    blendSrc: THREE.OneFactor,
-    blendDst: THREE.OneMinusSrcAlphaFactor,
-    depthWrite: false,
-  });
-}
-
-/** Archery-style target face: concentric warm/ivory rings. */
+/** Target face: porcelain disc with fine graphite rings and a terracotta centre. */
 export function createTargetTexture(): THREE.CanvasTexture {
-  const size = 256;
+  const size = 512;
   const c = document.createElement('canvas');
   c.width = c.height = size;
   const g = c.getContext('2d')!;
-  const rings = ['#e6e1d8', '#ff4f1f', '#e6e1d8', '#ff4f1f', '#e6e1d8', '#ff4f1f'];
   const cx = size / 2;
-  for (let i = 0; i < rings.length; i++) {
-    g.fillStyle = rings[i];
+  const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
+  g.fillStyle = hex(PALETTE.porcelain);
+  g.fillRect(0, 0, size, size);
+  // Wide terracotta band, then fine rings, then a solid centre.
+  g.strokeStyle = hex(PALETTE.accent);
+  g.lineWidth = size * 0.045;
+  g.beginPath();
+  g.arc(cx, cx, cx * 0.7, 0, Math.PI * 2);
+  g.stroke();
+  g.strokeStyle = hex(PALETTE.graphite);
+  g.lineWidth = size * 0.006;
+  for (const r of [0.92, 0.5, 0.34]) {
     g.beginPath();
-    g.arc(cx, cx, (cx * (rings.length - i)) / rings.length, 0, Math.PI * 2);
-    g.fill();
+    g.arc(cx, cx, cx * r, 0, Math.PI * 2);
+    g.stroke();
   }
+  g.fillStyle = hex(PALETTE.accent);
+  g.beginPath();
+  g.arc(cx, cx, cx * 0.17, 0, Math.PI * 2);
+  g.fill();
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
@@ -184,10 +175,11 @@ export function createTargetTexture(): THREE.CanvasTexture {
 }
 
 /**
- * Tiny procedural environment (dark navy room with cyan strips and a warm panel)
- * baked once through PMREM so glossy objects get believable neon reflections.
+ * Tiny procedural photo-studio environment (neutral grey room, one large softbox
+ * up-front-left and a faint fill strip) baked once through PMREM so satin and
+ * brushed-metal objects get soft, believable reflections.
  */
-export function createNeonEnvironment(renderer: THREE.WebGLRenderer): THREE.WebGLRenderTarget {
+export function createStudioEnvironment(renderer: THREE.WebGLRenderer): THREE.WebGLRenderTarget {
   const env = new THREE.Scene();
   const disposables: { dispose(): void }[] = [];
   const add = (geo: THREE.BufferGeometry, mat: THREE.Material, setup: (m: THREE.Mesh) => void) => {
@@ -198,25 +190,26 @@ export function createNeonEnvironment(renderer: THREE.WebGLRenderer): THREE.WebG
   };
   add(
     new THREE.BoxGeometry(20, 20, 20),
-    new THREE.MeshBasicMaterial({ color: 0x060a1c, side: THREE.BackSide }),
+    new THREE.MeshBasicMaterial({ color: 0x6f7376, side: THREE.BackSide }),
     () => {},
   );
-  const stripMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0x2ee6ff).multiplyScalar(3) });
-  for (let i = 0; i < 4; i++) {
-    add(new THREE.PlaneGeometry(18, 0.25), i === 0 ? stripMat : stripMat.clone(), (m) => {
-      m.position.set(0, 9.9, -6 + i * 4);
-      m.rotation.x = Math.PI / 2;
-    });
-  }
-  add(new THREE.PlaneGeometry(6, 4), new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff6a3d).multiplyScalar(2.5) }), (m) => {
-    m.position.set(0, 1, -9.9);
+  // Darker floor half so reflections have a horizon.
+  add(new THREE.PlaneGeometry(20, 20), new THREE.MeshBasicMaterial({ color: 0x45484b }), (m) => {
+    m.position.y = -9.9;
+    m.rotation.x = -Math.PI / 2;
   });
-  add(new THREE.PlaneGeometry(5, 5), new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffffff).multiplyScalar(4) }), (m) => {
-    m.position.set(-4, 6, 9.9);
+  // Key softbox: above and in front (toward the viewer), slightly left.
+  add(new THREE.PlaneGeometry(9, 6), new THREE.MeshBasicMaterial({ color: new THREE.Color(0xfff6ec).multiplyScalar(2.4) }), (m) => {
+    m.position.set(-3, 6, 9.9);
     m.rotation.y = Math.PI;
   });
+  // Faint vertical fill strip on the right.
+  add(new THREE.PlaneGeometry(2, 12), new THREE.MeshBasicMaterial({ color: new THREE.Color(0xe8ecef).multiplyScalar(0.9) }), (m) => {
+    m.position.set(9.9, 1, 0);
+    m.rotation.y = -Math.PI / 2;
+  });
   const pmrem = new THREE.PMREMGenerator(renderer);
-  const rt = pmrem.fromScene(env, 0.02);
+  const rt = pmrem.fromScene(env, 0.04);
   pmrem.dispose();
   for (const d of disposables) d.dispose();
   return rt;
